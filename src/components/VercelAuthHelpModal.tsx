@@ -18,7 +18,6 @@ interface VercelAuthHelpModalProps {
   onClose: () => void;
   domain?: string | null;
   onRetryLogin?: () => void;
-  onSwitchToLocalXlsx?: () => void;
   isRetrying?: boolean;
 }
 
@@ -27,7 +26,6 @@ export function VercelAuthHelpModal({
   onClose,
   domain,
   onRetryLogin,
-  onSwitchToLocalXlsx,
   isRetrying = false,
 }: VercelAuthHelpModalProps) {
   const [copiedDomain, setCopiedDomain] = useState(false);
@@ -249,30 +247,7 @@ VITE_FIREBASE_APP_ID="1:67251400832:web:..."`;
           </div>
         )}
 
-        {/* Alternative: Offline Excel */}
-        {onSwitchToLocalXlsx && (
-          <div className="flex items-center justify-between p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 text-xs">
-            <div className="flex items-center gap-2">
-              <FileCode className="h-4 w-4 text-emerald-600 shrink-0" />
-              <div>
-                <p className="font-semibold text-foreground">Precisa usar imediatamente sem configurar o Firebase?</p>
-                <p className="text-[11px] text-muted-foreground">
-                  O modo <strong>Arquivo Excel (.xlsx)</strong> funciona 100% no seu navegador sem login do Google.
-                </p>
-              </div>
-            </div>
-            <button
-              type="button"
-              onClick={() => {
-                onSwitchToLocalXlsx();
-                onClose();
-              }}
-              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-600/40 bg-card hover:bg-emerald-50 dark:hover:bg-emerald-950/30 text-emerald-700 dark:text-emerald-300 font-semibold cursor-pointer shrink-0 transition-colors"
-            >
-              Usar Excel (.xlsx)
-            </button>
-          </div>
-        )}
+
 
         {/* Bottom Actions */}
         <div className="flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2.5 pt-3 border-t border-border">

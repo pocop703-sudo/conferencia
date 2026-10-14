@@ -6,15 +6,7 @@ import {
   readManifestFile,
   DEMO_MANIFEST_TEXT,
 } from './utils/manifestParser';
-import {
-  loadWorkbookFromBuffer,
-  fillWorkbookWithManifest,
-  updateSheetDate,
-  updateSheetOrderNumber,
-  downloadFilledWorkbook,
-  calculateJulianOrderNumber,
-  generateDemoTemplateWorkbook,
-} from './utils/excelProcessor';
+import { calculateJulianOrderNumber } from './utils/excelProcessor';
 import {
   extractSpreadsheetId,
   fetchSpreadsheetMeta,
@@ -40,21 +32,20 @@ import {
   History,
   Route,
   Upload,
-  Download,
   RotateCcw,
   Sparkles,
   Trash2,
   ArrowRight,
   Info,
   Globe,
-  FileCode,
   ExternalLink,
   LogOut,
   Loader2,
   Settings2,
   Check,
-  Copy,
   LogIn,
+  Mail,
+  UserCheck,
 } from 'lucide-react';
 
 interface StatCardProps {
@@ -86,10 +77,8 @@ const STORAGE_SAVED_TAB_KEY = 'gs_saved_tab';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'processar' | 'historico' | 'planilha'>('processar');
-  const [sheetMode, setSheetMode] = useState<'local_xlsx' | 'google_sheets'>('google_sheets');
   const [selectedDate, setSelectedDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [manifestFile, setManifestFile] = useState<File | null>(null);
-  const [sheetFile, setSheetFile] = useState<File | null>(null);
   const [sheetData, setSheetData] = useState<SheetData | null>(null);
   const [manifestBatches, setManifestBatches] = useState<ManifestBatch[]>([]);
   const [step, setStep] = useState<number>(1);
@@ -100,7 +89,7 @@ export default function App() {
   const [filledStoreKeys, setFilledStoreKeys] = useState<string[]>([]);
   const [isDragging, setIsDragging] = useState<boolean>(false);
 
-  // Google Sheets state
+  // Google Sheets & Google Auth state
   const [googleUser, setGoogleUser] = useState<User | null>(null);
   const [googleAccessToken, setGoogleAccessToken] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
@@ -119,14 +108,12 @@ export default function App() {
   const [isSavingGoogleSheets, setIsSavingGoogleSheets] = useState<boolean>(false);
   const [unauthorizedDomain, setUnauthorizedDomain] = useState<string | null>(null);
   const [showVercelHelpModal, setShowVercelHelpModal] = useState<boolean>(false);
-  const [copiedDomain, setCopiedDomain] = useState<boolean>(false);
 
   const manifestInputRef = useRef<HTMLInputElement>(null);
-  const sheetInputRef = useRef<HTMLInputElement>(null);
 
   const orderNumber = calculateJulianOrderNumber(selectedDate);
 
-  // Listen to Firebase Google Auth state
+  // Listen to Firebase Google Auth state & persistent token
   useEffect(() => {
     const unsubscribe = initAuth(
       (user, token) => {
@@ -144,17 +131,17 @@ export default function App() {
   // Auto-connect to saved Google Sheet when token becomes available
   useEffect(() => {
     const savedUrl = localStorage.getItem(STORAGE_SAVED_URL_KEY);
-    if (savedUrl && googleAccessToken && !sheetData && sheetMode === 'google_sheets') {
+    if (savedUrl && googleAccessToken && !sheetData) {
       connectToGoogleSheet(savedUrl, localStorage.getItem(STORAGE_SAVED_TAB_KEY) || '', googleAccessToken);
     }
-  }, [googleAccessToken, sheetMode]);
+  }, [googleAccessToken]);
 
   // Flatten all entries from added batches
   const allEntries = useMemo(() => {
     return manifestBatches.length ? manifestBatches.flatMap((b) => b.entries) : null;
   }, [manifestBatches]);
 
-  // Lookup map of stores in the active spreadsheet (Local or Google Sheets)
+  // Lookup map of stores in the active Google Sheets spreadsheet
   const sheetStoreMap = useMemo(() => {
     const map = new Map<string, { display: string; route: string }>();
     sheetData?.routes.forEach((route) => {
@@ -200,8 +187,9 @@ export default function App() {
         setStatusMessage(`Conectado como ${res.user.displayName || res.user.email}`);
 
         // If URL is present, connect immediately
-        if (googleSheetsUrl.trim()) {
-          connectToGoogleSheet(googleSheetsUrl, selectedTabName, res.accessToken);
+        const targetUrl = googleSheetsUrl.trim() || localStorage.getItem(STORAGE_SAVED_URL_KEY) || '';
+        if (targetUrl) {
+          connectToGoogleSheet(targetUrl, selectedTabName, res.accessToken);
         }
       }
     } catch (err: any) {
@@ -222,9 +210,7 @@ export default function App() {
     setGoogleUser(null);
     setGoogleAccessToken(null);
     setSpreadsheetMeta(null);
-    if (sheetData?.sourceType === 'google_sheets') {
-      setSheetData(null);
-    }
+    setSheetData(null);
     setStatusMessage('Desconectado do Google.');
   }
 
@@ -237,24 +223,6 @@ export default function App() {
     setStatusMessage('');
     setErrorMessage('');
     if (manifestInputRef.current) manifestInputRef.current.value = '';
-  }
-
-  // Load local XLSX spreadsheet
-  async function handleLoadSheet(file: File) {
-    setErrorMessage('');
-    try {
-      setSheetFile(file);
-      setStatusMessage('Lendo planilha XLSX...');
-      const loaded = await loadWorkbookFromBuffer(file);
-      if (!loaded.routes.length) {
-        throw new Error('Nenhuma rota ou coluna LOJA/VOL encontrada na planilha.');
-      }
-      setSheetData(loaded);
-      setStatusMessage(`Planilha local carregada: ${loaded.routes.length} rotas identificadas.`);
-    } catch (err: any) {
-      setErrorMessage(`Não foi possível ler a planilha: ${err.message}`);
-      setSheetData(null);
-    }
   }
 
   // Internal connect logic to Google Sheet
@@ -328,21 +296,6 @@ export default function App() {
 
     if (!token) return;
     await connectToGoogleSheet(googleSheetsUrl, selectedTabName, token);
-  }
-
-  // Generate demo spreadsheet
-  async function handleLoadDemoSheet() {
-    try {
-      setIsLoading(true);
-      setStatusMessage('Gerando planilha modelo de demonstração...');
-      const demoFile = await generateDemoTemplateWorkbook();
-      await handleLoadSheet(demoFile);
-      setSheetMode('local_xlsx');
-    } catch (err: any) {
-      setErrorMessage(`Erro ao gerar planilha modelo: ${err.message}`);
-    } finally {
-      setIsLoading(false);
-    }
   }
 
   // Process manifest (PDF or image)
@@ -451,41 +404,6 @@ export default function App() {
     });
   }
 
-  // Fill Local XLSX Workbook
-  function handleFillLocalWorkbook() {
-    if (!sheetData || !allEntries) return;
-
-    const volumeMap = new Map<string, number>(
-      matchedStores.map((store) => [normalizeCode(store.code), store.volumes])
-    );
-
-    fillWorkbookWithManifest(sheetData, volumeMap);
-    updateSheetDate(sheetData, selectedDate);
-    updateSheetOrderNumber(sheetData, orderNumber);
-
-    setFilledStoreKeys([...volumeMap.keys()]);
-
-    addHistory({
-      id: crypto.randomUUID(),
-      date: selectedDate,
-      manifest: manifestBatches.map((b) => b.name).join(' + '),
-      stores: allEntries.length,
-      volumes: totalVolumes,
-      filled: volumeMap.size,
-      missing: unmatchedStores.length,
-      status: unmatchedStores.length ? 'Com pendências' : 'Concluído',
-      targetType: 'local_xlsx',
-      spreadsheetTitle: sheetData.fileName,
-      entries: allEntries.map((e) => ({
-        code: e.code,
-        volumes: e.volumes,
-        occurrences: e.occurrences,
-      })),
-    });
-
-    setStep(3);
-  }
-
   // Save to Google Sheets (after modal confirmation)
   async function handleExecuteGoogleSheetsUpdate() {
     if (!sheetData || !sheetData.spreadsheetId || !allEntries) return;
@@ -495,7 +413,22 @@ export default function App() {
       token = await getAccessToken();
     }
     if (!token) {
-      setErrorMessage('Sessão expirada. Por favor, conecte-se com sua conta Google novamente.');
+      try {
+        const authRes = await googleSignIn();
+        if (authRes) {
+          token = authRes.accessToken;
+          setGoogleUser(authRes.user);
+          setGoogleAccessToken(authRes.accessToken);
+        }
+      } catch (err: any) {
+        setErrorMessage('Sessão expirada. Por favor, conecte-se com sua conta Google novamente.');
+        setShowConfirmModal(false);
+        return;
+      }
+    }
+
+    if (!token) {
+      setErrorMessage('Token de acesso do Google Sheets não encontrado. Faça login com o Google para autorizar.');
       setShowConfirmModal(false);
       return;
     }
@@ -560,60 +493,109 @@ export default function App() {
     <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
       {/* Header */}
       <header className="text-primary-foreground shadow-md" style={{ background: 'var(--gradient-header)' }}>
-        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mx-auto flex max-w-6xl flex-col gap-3 px-4 py-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/20 backdrop-blur-sm shadow-inner">
-              <FileSpreadsheet className="h-6 w-6 text-white" />
+              <Globe className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-xl font-bold uppercase tracking-wide sm:text-2xl text-white">
-                Conferência de Volumes
-              </h1>
-              <p className="text-sm opacity-90 text-white/80">
-                Preenchimento automático do manifesto na sua planilha online do Google Sheets
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold uppercase tracking-wide sm:text-2xl text-white">
+                  Conferência de Volumes
+                </h1>
+                <span className="hidden sm:inline-flex items-center gap-1 rounded-full bg-white/20 px-2 py-0.5 text-[11px] font-semibold text-white">
+                  Google Sheets
+                </span>
+              </div>
+              <p className="text-xs sm:text-sm text-white/85">
+                Preenchimento automático na sua planilha online via Google Sheets
               </p>
             </div>
           </div>
 
-          {/* Navigation Tabs */}
-          <nav className="flex gap-1 rounded-lg bg-black/20 p-1 backdrop-blur-sm self-start sm:self-auto">
-            <button
-              onClick={() => setActiveTab('processar')}
-              className={`flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all ${
-                activeTab === 'processar'
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-white/85 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <Upload className="h-4 w-4" />
-              Processar
-            </button>
-            <button
-              onClick={() => {
-                setActiveTab('historico');
-                setHistoryList(getHistory());
-              }}
-              className={`flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all ${
-                activeTab === 'historico'
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-white/85 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <History className="h-4 w-4" />
-              Histórico
-            </button>
-            <button
-              onClick={() => setActiveTab('planilha')}
-              className={`flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-sm font-medium transition-all ${
-                activeTab === 'planilha'
-                  ? 'bg-card text-foreground shadow-sm'
-                  : 'text-white/85 hover:bg-white/10 hover:text-white'
-              }`}
-            >
-              <Route className="h-4 w-4" />
-              Rotas e lojas
-            </button>
-          </nav>
+          {/* Account status in Header & Navigation Tabs */}
+          <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+            {googleUser ? (
+              <div className="flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-xs text-white backdrop-blur-xs border border-white/20">
+                {googleUser.photoURL ? (
+                  <img
+                    src={googleUser.photoURL}
+                    alt={googleUser.displayName || 'Google'}
+                    className="h-5 w-5 rounded-full object-cover border border-white/40"
+                  />
+                ) : (
+                  <div className="flex h-5 w-5 items-center justify-center rounded-full bg-white text-blue-700 font-bold text-[10px]">
+                    {(googleUser.displayName || googleUser.email || 'G')[0].toUpperCase()}
+                  </div>
+                )}
+                <span className="font-medium max-w-[150px] truncate" title={googleUser.email || ''}>
+                  {googleUser.email}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleGoogleLogout}
+                  className="ml-1 text-white/70 hover:text-white p-0.5 rounded transition-colors"
+                  title="Sair da conta Google"
+                >
+                  <LogOut className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                disabled={isLoggingIn}
+                onClick={handleGoogleLogin}
+                className="inline-flex items-center gap-1.5 rounded-full bg-white px-3.5 py-1 text-xs font-semibold text-blue-700 shadow-sm hover:bg-white/90 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {isLoggingIn ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <LogIn className="h-3.5 w-3.5" />
+                )}
+                Login Google
+              </button>
+            )}
+
+            {/* Navigation Tabs */}
+            <nav className="flex gap-1 rounded-lg bg-black/25 p-1 backdrop-blur-sm">
+              <button
+                onClick={() => setActiveTab('processar')}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                  activeTab === 'processar'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-white/85 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Upload className="h-3.5 w-3.5" />
+                Processar
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('historico');
+                  setHistoryList(getHistory());
+                }}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                  activeTab === 'historico'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-white/85 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <History className="h-3.5 w-3.5" />
+                Histórico
+              </button>
+              <button
+                onClick={() => setActiveTab('planilha')}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-all ${
+                  activeTab === 'planilha'
+                    ? 'bg-card text-foreground shadow-sm'
+                    : 'text-white/85 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Route className="h-3.5 w-3.5" />
+                Rotas e lojas
+              </button>
+            </nav>
+          </div>
         </div>
       </header>
 
@@ -654,17 +636,6 @@ export default function App() {
                       <span>Como liberar este domínio no Firebase</span>
                       <ArrowRight className="h-3.5 w-3.5" />
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSheetMode('local_xlsx');
-                        setErrorMessage('');
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card hover:bg-accent text-foreground text-xs font-medium shadow-xs transition-colors cursor-pointer"
-                    >
-                      <FileCode className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>Alternar para Arquivo Excel (.xlsx)</span>
-                    </button>
                   </div>
                 )}
               </div>
@@ -675,281 +646,255 @@ export default function App() {
         {/* Tab 1: PROCESSAR */}
         {activeTab === 'processar' && (
           <div className="space-y-6">
-            {/* Section: Planilha de Destino (Google Sheets ou XLSX) */}
+            {/* Section: Planilha de Destino no Google Sheets */}
             <section className="rounded-xl border border-border bg-card p-5 shadow-[var(--shadow-card)]">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-border/60">
-                <div>
-                  <h2 className="text-base font-semibold flex items-center gap-2">
-                    <Globe className="h-4 w-4 text-blue-600" />
-                    <span>Planilha de Destino</span>
-                  </h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Configure onde os volumes conferidos serão gravados automaticamente.
-                  </p>
-                </div>
-
-                {/* Mode Selector */}
-                <div className="flex items-center gap-1 p-1 bg-muted rounded-lg border border-border self-start sm:self-auto">
+              <div className="pb-3 border-b border-border/60">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h2 className="text-base font-semibold flex items-center gap-2">
+                      <Globe className="h-4 w-4 text-blue-600" />
+                      <span>Planilha Online no Google Sheets</span>
+                    </h2>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      O acesso à planilha é gerenciado exclusivamente através da sua conta Google conectada.
+                    </p>
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setSheetMode('google_sheets')}
-                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                      sheetMode === 'google_sheets'
-                        ? 'bg-card text-foreground shadow-sm font-semibold'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
+                    onClick={() => setShowVercelHelpModal(true)}
+                    className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-1 rounded hover:bg-muted transition-colors cursor-pointer"
+                    title="Instruções para deploy no Vercel ou domínios personalizados"
                   >
-                    <Globe className="h-3.5 w-3.5 text-blue-600" />
-                    Google Sheets Online
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setSheetMode('local_xlsx')}
-                    className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                      sheetMode === 'local_xlsx'
-                        ? 'bg-card text-foreground shadow-sm font-semibold'
-                        : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    <FileCode className="h-3.5 w-3.5 text-emerald-600" />
-                    Arquivo Excel (.xlsx)
+                    <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                    <span>Ajuda Vercel</span>
                   </button>
                 </div>
               </div>
 
-              {/* Google Sheets Active Mode */}
-              {sheetMode === 'google_sheets' && (
-                <div className="mt-4 space-y-4">
-                  {/* Account Header */}
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3 rounded-lg bg-muted/30 border border-border/70">
+              {/* Login State & Account Information */}
+              <div className="mt-4 space-y-4">
+                {googleUser ? (
+                  /* Logged-In User Card */
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3.5 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-200/80 dark:border-blue-900/50">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-700 font-bold text-sm">
-                        {googleUser?.displayName ? googleUser.displayName[0] : 'G'}
-                      </div>
+                      {googleUser.photoURL ? (
+                        <img
+                          src={googleUser.photoURL}
+                          alt={googleUser.displayName || 'Google'}
+                          className="h-10 w-10 rounded-full object-cover border border-blue-300 dark:border-blue-700 shadow-xs"
+                        />
+                      ) : (
+                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white font-bold text-sm shadow-xs">
+                          {(googleUser.displayName || googleUser.email || 'G')[0].toUpperCase()}
+                        </div>
+                      )}
                       <div>
-                        <p className="text-xs font-semibold text-foreground">
-                          {googleUser
-                            ? googleUser.displayName || googleUser.email
-                            : 'Conecte sua conta Google para sincronização'}
-                        </p>
-                        <p className="text-[11px] text-muted-foreground">
-                          {googleUser
-                            ? 'Permissão ativa para ler e atualizar sua planilha no Google Sheets'
-                            : 'O app grava os dados direto na sua planilha na nuvem'}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-bold text-foreground">
+                            {googleUser.displayName || 'Usuário Google'}
+                          </p>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
+                            <CheckCircle2 className="h-3 w-3" />
+                            Acesso Google Sheets Ativo
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
+                          <Mail className="h-3 w-3 text-blue-600" />
+                          <span className="font-mono">{googleUser.email}</span>
                         </p>
                       </div>
                     </div>
 
-                    {googleUser ? (
-                      <button
-                        type="button"
-                        onClick={handleGoogleLogout}
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive px-2 py-1 rounded transition-colors self-start sm:self-auto"
-                      >
-                        <LogOut className="h-3 w-3" />
-                        Desconectar
-                      </button>
-                    ) : (
-                      <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
+                      {!googleAccessToken && (
                         <button
                           type="button"
                           disabled={isLoggingIn}
                           onClick={handleGoogleLogin}
-                          className="inline-flex items-center gap-2 rounded-md border border-input bg-card px-3.5 py-1.5 text-xs font-medium text-foreground shadow-sm hover:bg-accent transition-colors disabled:opacity-50 cursor-pointer"
+                          className="inline-flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 px-3 py-1.5 rounded-md font-semibold transition-colors cursor-pointer"
                         >
-                          {isLoggingIn ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-                          ) : (
-                            <svg className="h-3.5 w-3.5" viewBox="0 0 24 24">
-                              <path
-                                fill="#4285F4"
-                                d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                              />
-                              <path
-                                fill="#34A853"
-                                d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                              />
-                              <path
-                                fill="#FBBC05"
-                                d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                              />
-                              <path
-                                fill="#EA4335"
-                                d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                              />
-                            </svg>
-                          )}
-                          Fazer login com Google
+                          Renovar autorização
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setShowVercelHelpModal(true)}
-                          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground px-2 py-1.5 rounded hover:bg-muted transition-colors cursor-pointer"
-                          title="Instruções para deploy no Vercel ou domínios personalizados"
-                        >
-                          <ShieldAlert className="h-3 w-3 text-amber-500" />
-                          <span>Ajuda Vercel</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Connected Status Card with Quick Change button */}
-                  {sheetData?.sourceType === 'google_sheets' && !isEditingSheetUrl ? (
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-                      <div className="flex items-center gap-2.5">
-                        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 shrink-0">
-                          <Check className="h-4 w-4" />
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                            <span>{sheetData.spreadsheetTitle}</span>
-                            <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-muted text-muted-foreground">
-                              Aba: {sheetData.sheetName}
-                            </span>
-                          </p>
-                          <p className="text-[11px] text-muted-foreground mt-0.5">
-                            {sheetData.routes.length} rotas e {sheetData.routes.reduce((a, b) => a + b.stores.length, 0)} lojas prontas para receber volumes
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2">
-                        {sheetData.spreadsheetUrl && (
-                          <a
-                            href={sheetData.spreadsheetUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline px-2.5 py-1 rounded bg-card border border-border"
-                          >
-                            Abrir planilha
-                            <ExternalLink className="h-3 w-3" />
-                          </a>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => setIsEditingSheetUrl(true)}
-                          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2.5 py-1 rounded border border-input bg-card"
-                        >
-                          <Settings2 className="h-3 w-3" />
-                          Alterar planilha
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Spreadsheet URL Configuration */
-                    <div className="p-4 rounded-lg border border-border bg-card space-y-3">
-                      <div className="grid gap-3 sm:grid-cols-12 items-end">
-                        <div className="sm:col-span-8 flex flex-col">
-                          <label className="text-xs uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-                            LINK OU ID DA PLANILHA NO GOOGLE SHEETS
-                          </label>
-                          <input
-                            type="text"
-                            value={googleSheetsUrl}
-                            onChange={(e) => setGoogleSheetsUrl(e.target.value)}
-                            placeholder="https://docs.google.com/spreadsheets/d/.../edit"
-                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
-                          />
-                        </div>
-
-                        {spreadsheetMeta && spreadsheetMeta.sheets.length > 1 && (
-                          <div className="sm:col-span-4 flex flex-col">
-                            <label className="text-xs uppercase tracking-wide text-muted-foreground font-semibold mb-1">
-                              ABA / PÁGINA
-                            </label>
-                            <select
-                              value={selectedTabName}
-                              onChange={(e) => setSelectedTabName(e.target.value)}
-                              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                            >
-                              {spreadsheetMeta.sheets.map((s) => (
-                                <option key={s.sheetId} value={s.title}>
-                                  {s.title}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        )}
-
-                        <div className={spreadsheetMeta && spreadsheetMeta.sheets.length > 1 ? 'sm:col-span-12' : 'sm:col-span-4'}>
-                          <button
-                            type="button"
-                            disabled={!googleSheetsUrl.trim() || isLoading}
-                            onClick={handleConnectGoogleSheet}
-                            className="w-full h-9 inline-flex items-center justify-center gap-2 rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground shadow transition-colors hover:bg-primary/90 disabled:opacity-50 cursor-pointer"
-                          >
-                            {isLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Globe className="h-3.5 w-3.5" />
-                            )}
-                            Conectar e Ler Planilha
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
-                        <label className="flex items-center gap-2 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={saveAsDefault}
-                            onChange={(e) => setSaveAsDefault(e.target.checked)}
-                            className="rounded border-input text-primary focus:ring-primary h-3.5 w-3.5"
-                          />
-                          <span>Salvar esta planilha como padrão neste navegador (não precisará colar novamente)</span>
-                        </label>
-                        {sheetData?.sourceType === 'google_sheets' && (
-                          <button
-                            type="button"
-                            onClick={() => setIsEditingSheetUrl(false)}
-                            className="text-xs text-primary hover:underline"
-                          >
-                            Cancelar
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Local XLSX Active Mode */}
-              {sheetMode === 'local_xlsx' && (
-                <div className="mt-4 grid gap-4 sm:grid-cols-2 items-end p-4 rounded-lg border border-border bg-muted/20">
-                  <label className="text-sm font-medium flex flex-col">
-                    <span className="text-xs uppercase tracking-wide text-muted-foreground font-semibold mb-1 flex items-center justify-between">
-                      <span>SELECIONAR ARQUIVO (XLSX)</span>
-                      {sheetData?.sourceType === 'local_xlsx' && (
-                        <span className="text-[11px] text-success font-medium">✓ Planilha carregada</span>
                       )}
-                    </span>
-                    <input
-                      ref={sheetInputRef}
-                      type="file"
-                      accept=".xlsx"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) handleLoadSheet(f);
-                      }}
-                      className="flex h-9 w-full rounded-md border border-input bg-card px-3 py-1 text-xs shadow-sm transition-colors file:border-0 file:bg-transparent file:text-xs file:font-semibold file:text-primary placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    />
-                  </label>
+                      <button
+                        type="button"
+                        onClick={handleGoogleLogout}
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive px-2.5 py-1.5 rounded-md hover:bg-card border border-border/60 transition-colors"
+                      >
+                        <LogOut className="h-3.5 w-3.5" />
+                        Trocar conta / Sair
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Not Logged In Prompt */
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 shrink-0">
+                        <UserCheck className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-foreground">
+                          Faça login com sua conta Google para continuar
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-0.5 max-w-xl leading-relaxed">
+                          O acesso à sua planilha online do Google Sheets é concedido diretamente ao e-mail conectado.
+                          Seus dados permanecem seguros no seu Google Drive.
+                        </p>
+                      </div>
+                    </div>
 
-                  <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      disabled={isLoading}
-                      onClick={handleLoadDemoSheet}
-                      className="h-9 inline-flex items-center justify-center gap-1.5 rounded-md border border-dashed border-input bg-card px-3.5 py-1 text-xs font-medium text-muted-foreground shadow-sm transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 cursor-pointer"
-                      title="Gera uma planilha XLSX de exemplo com rotas para teste"
+                      disabled={isLoggingIn}
+                      onClick={handleGoogleLogin}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 text-xs font-bold shadow transition-colors disabled:opacity-50 cursor-pointer shrink-0"
                     >
-                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                      Usar planilha modelo demo
+                      {isLoggingIn ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-white" />
+                      ) : (
+                        <svg className="h-4 w-4" viewBox="0 0 24 24">
+                          <path
+                            fill="#FFFFFF"
+                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                          />
+                          <path
+                            fill="#FFFFFF"
+                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                          />
+                          <path
+                            fill="#FFFFFF"
+                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
+                          />
+                          <path
+                            fill="#FFFFFF"
+                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
+                          />
+                        </svg>
+                      )}
+                      Fazer login com Google
                     </button>
                   </div>
-                </div>
-              )}
+                )}
+
+                {/* Connected Status Card with Quick Change button */}
+                {sheetData && !isEditingSheetUrl ? (
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-3.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 shrink-0">
+                        <Check className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <span>{sheetData.spreadsheetTitle}</span>
+                          <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-muted text-muted-foreground">
+                            Aba: {sheetData.sheetName}
+                          </span>
+                        </p>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                          {sheetData.routes.length} rotas e {sheetData.routes.reduce((a, b) => a + b.stores.length, 0)} lojas prontas para receber volumes
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {sheetData.spreadsheetUrl && (
+                        <a
+                          href={sheetData.spreadsheetUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline px-2.5 py-1 rounded bg-card border border-border"
+                        >
+                          Abrir planilha
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setIsEditingSheetUrl(true)}
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground px-2.5 py-1 rounded border border-input bg-card cursor-pointer"
+                      >
+                        <Settings2 className="h-3 w-3" />
+                        Alterar planilha
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Spreadsheet URL Configuration */
+                  <div className="p-4 rounded-lg border border-border bg-card space-y-3">
+                    <div className="grid gap-3 sm:grid-cols-12 items-end">
+                      <div className="sm:col-span-8 flex flex-col">
+                        <label className="text-xs uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                          LINK OU ID DA PLANILHA NO GOOGLE SHEETS
+                        </label>
+                        <input
+                          type="text"
+                          value={googleSheetsUrl}
+                          onChange={(e) => setGoogleSheetsUrl(e.target.value)}
+                          placeholder="https://docs.google.com/spreadsheets/d/.../edit"
+                          className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring font-mono"
+                        />
+                      </div>
+
+                      {spreadsheetMeta && spreadsheetMeta.sheets.length > 1 && (
+                        <div className="sm:col-span-4 flex flex-col">
+                          <label className="text-xs uppercase tracking-wide text-muted-foreground font-semibold mb-1">
+                            ABA / PÁGINA
+                          </label>
+                          <select
+                            value={selectedTabName}
+                            onChange={(e) => setSelectedTabName(e.target.value)}
+                            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          >
+                            {spreadsheetMeta.sheets.map((s) => (
+                              <option key={s.sheetId} value={s.title}>
+                                {s.title}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
+                      <div className={spreadsheetMeta && spreadsheetMeta.sheets.length > 1 ? 'sm:col-span-12' : 'sm:col-span-4'}>
+                        <button
+                          type="button"
+                          disabled={!googleSheetsUrl.trim() || isLoading}
+                          onClick={handleConnectGoogleSheet}
+                          className="w-full h-9 inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-1 text-xs font-semibold text-white shadow transition-colors hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
+                        >
+                          {isLoading ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Globe className="h-3.5 w-3.5" />
+                          )}
+                          Conectar e Ler Planilha
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                      <label className="flex items-center gap-2 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={saveAsDefault}
+                          onChange={(e) => setSaveAsDefault(e.target.checked)}
+                          className="rounded border-input text-primary focus:ring-primary h-3.5 w-3.5"
+                        />
+                        <span>Salvar esta planilha como padrão neste navegador (não precisará colar novamente)</span>
+                      </label>
+                      {sheetData && (
+                        <button
+                          type="button"
+                          onClick={() => setIsEditingSheetUrl(false)}
+                          className="text-xs text-primary hover:underline cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
             </section>
 
             {/* Section: Upload & Processamento do Manifesto */}
@@ -1007,196 +952,173 @@ export default function App() {
                 </label>
               </div>
 
-              {/* Drag and drop zone */}
+              {/* Drag and Drop Zone */}
               <div
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
-                onClick={() => manifestInputRef.current?.click()}
-                className={`mt-4 border-2 border-dashed rounded-xl p-8 text-center transition-all cursor-pointer ${
+                className={`mt-4 flex flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center transition-all ${
                   isDragging
-                    ? 'border-primary bg-primary/5 scale-[1.005]'
-                    : 'border-border/80 hover:border-primary/50 hover:bg-muted/20'
+                    ? 'border-primary bg-primary/10 scale-[1.01]'
+                    : 'border-border bg-muted/20 hover:border-primary/50'
                 }`}
               >
-                <div className="flex flex-col items-center justify-center space-y-2">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                    <Upload className="h-6 w-6" />
-                  </div>
-                  <p className="text-sm font-semibold text-foreground">
-                    Arraste e solte o arquivo do manifesto aqui (PDF ou Imagem)
-                  </p>
-                  <p className="text-xs text-muted-foreground max-w-sm">
-                    Lê automaticamente o PDF do manifesto ou imagem com OCR e cruza com as lojas da sua planilha
-                  </p>
+                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary mb-2">
+                  <Upload className="h-6 w-6" />
                 </div>
-              </div>
+                <p className="text-sm font-semibold">
+                  Arraste e solte o manifesto aqui (PDF ou imagem)
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Suporta manifestos em PDF texto, PDFs digitalizados ou imagens (OCR)
+                </p>
 
-              {/* Action buttons */}
-              <div className="mt-4 flex flex-wrap items-center gap-3 pt-3 border-t border-border/60">
-                <button
-                  type="button"
-                  disabled={isLoading}
-                  onClick={() => processManifestFile(null, true)}
-                  className="inline-flex items-center justify-center gap-2 rounded-md border border-input bg-background px-4 py-2 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 cursor-pointer"
-                >
-                  <Sparkles className="h-4 w-4 text-primary" />
-                  Testar com manifesto de demonstração
-                </button>
-
-                {manifestBatches.length > 0 && (
+                <div className="mt-3 flex items-center gap-2">
                   <button
                     type="button"
                     disabled={isLoading}
-                    onClick={handleReset}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground cursor-pointer"
+                    onClick={() => manifestInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-secondary px-3 py-1 text-xs font-medium text-secondary-foreground shadow-xs hover:bg-secondary/80 cursor-pointer"
                   >
-                    <RotateCcw className="h-4 w-4" />
-                    Nova conferência
+                    Procurar arquivo...
                   </button>
-                )}
-
-                {statusMessage && (
-                  <span className="text-sm text-muted-foreground flex items-center gap-1.5 ml-auto">
-                    <Info className="h-4 w-4 text-primary shrink-0" />
-                    {statusMessage}
-                  </span>
-                )}
+                  <span className="text-xs text-muted-foreground">ou</span>
+                  <button
+                    type="button"
+                    disabled={isLoading}
+                    onClick={() => processManifestFile(null, true)}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-input bg-card px-3 py-1 text-xs font-medium text-muted-foreground hover:bg-accent hover:text-foreground cursor-pointer"
+                  >
+                    <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+                    Carregar manifesto demo
+                  </button>
+                </div>
               </div>
+
+              {/* Status feedback banner */}
+              {statusMessage && (
+                <div className="mt-4 flex items-center gap-2 rounded-lg bg-primary/10 p-3 text-xs font-medium text-primary">
+                  {isLoading && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+                  <span>{statusMessage}</span>
+                </div>
+              )}
             </section>
 
-            {/* Step 2: Conferir dados encontrados */}
+            {/* Step 2: Conferência das lojas */}
             {step >= 2 && allEntries && (
-              <section className="rounded-xl border border-border bg-card p-5 shadow-[var(--shadow-card)] animate-fadeIn">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <section className="rounded-xl border border-border bg-card p-5 shadow-[var(--shadow-card)]">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-border">
                   <div>
                     <h2 className="text-lg font-semibold flex items-center gap-2">
-                      <span>Conferir dados encontrados</span>
-                      <span className="text-xs bg-primary/10 text-primary px-2.5 py-0.5 rounded-full font-medium">
-                        Passo 2 de 3
-                      </span>
+                      <CheckCircle2 className="h-5 w-5 text-primary" />
+                      Lojas encontradas no manifesto ({allEntries.length})
                     </h2>
-                    <p className="mt-0.5 text-sm text-muted-foreground">
-                      {manifestBatches.length} manifesto{manifestBatches.length > 1 ? 's' : ''} carregado
-                      {manifestBatches.length > 1 ? 's' : ''}. Revise os volumes antes da gravação.
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Total de volumes: <strong className="text-primary">{totalVolumes}</strong> · Verifique os dados antes de gravar no Google Sheets.
                     </p>
                   </div>
 
-                  {/* Destination badge */}
-                  {sheetData && (
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-semibold bg-primary/10 text-primary border border-primary/20">
-                      {sheetData.sourceType === 'google_sheets' ? (
-                        <>
-                          <Globe className="h-3.5 w-3.5 text-blue-600" />
-                          <span>Google Sheets: {sheetData.spreadsheetTitle || sheetData.fileName}</span>
-                        </>
-                      ) : (
-                        <>
-                          <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                          <span>Arquivo XLSX: {sheetData.fileName}</span>
-                        </>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Batch tags */}
-                  <div className="flex flex-wrap gap-2">
-                    {manifestBatches.map((batch) => (
-                      <div
-                        key={batch.id}
-                        className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-xs"
-                      >
-                        <span className="font-medium text-foreground">{batch.name}</span>
-                        <span className="text-muted-foreground">
-                          · {batch.entries.length} lojas · {batch.entries.reduce((a, b) => a + b.volumes, 0)} vol
-                        </span>
-                        <button
-                          onClick={() => handleRemoveBatch(batch.id)}
-                          className="text-xs font-semibold text-destructive hover:underline ml-1"
-                        >
-                          Remover
-                        </button>
-                      </div>
-                    ))}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => manifestInputRef.current?.click()}
+                      className="inline-flex items-center gap-1.5 text-xs font-medium text-primary hover:underline"
+                    >
+                      + Adicionar outro manifesto
+                    </button>
                   </div>
                 </div>
 
-                {/* 4 Stat Cards */}
-                <div className="mt-4 grid gap-3 grid-cols-2 sm:grid-cols-4">
-                  <StatCard label="Lojas encontradas" value={allEntries.length} tone="primary" />
-                  <StatCard label="Volumes totais" value={totalVolumes} tone="primary" />
-                  <StatCard label="Na planilha" value={matchedStores.length} tone="success" />
-                  <StatCard label="Fora da planilha" value={unmatchedStores.length} tone="warning" />
+                {/* Batches badges */}
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {manifestBatches.map((batch) => (
+                    <span
+                      key={batch.id}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2.5 py-1 text-xs font-medium text-foreground border border-border"
+                    >
+                      <span>{batch.name}</span>
+                      <span className="text-muted-foreground">({batch.entries.length} lojas)</span>
+                      {manifestBatches.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveBatch(batch.id)}
+                          className="hover:text-destructive text-muted-foreground"
+                          title="Remover este lote"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </span>
+                  ))}
                 </div>
 
-                {/* Stores Table */}
-                <div className="mt-4 overflow-x-auto rounded-lg border border-border">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
+                {/* Stores table */}
+                <div className="mt-4 max-h-96 overflow-y-auto rounded-lg border border-border">
+                  <table className="w-full text-xs">
+                    <thead className="bg-muted text-muted-foreground sticky top-0 uppercase tracking-wider">
                       <tr>
-                        <th className="px-3 py-2.5">Loja</th>
-                        <th className="px-3 py-2.5">Volumes</th>
-                        <th className="px-3 py-2.5 text-center">Ocorrências</th>
-                        <th className="px-3 py-2.5 text-center">Ignorados (1 vol.)</th>
-                        <th className="px-3 py-2.5">Rota na Planilha</th>
-                        <th className="px-3 py-2.5">Status</th>
-                        <th className="px-3 py-2.5 text-right">Ação</th>
+                        <th className="px-3 py-2 text-left">Código / Loja</th>
+                        <th className="px-3 py-2 text-left">Rota mapeada</th>
+                        <th className="px-3 py-2 text-right">Volumes</th>
+                        <th className="px-3 py-2 text-center">Status</th>
+                        <th className="px-3 py-2 text-right">Ação</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
-                      {manifestBatches.flatMap((batch) =>
+                      {manifestBatches.map((batch) =>
                         batch.entries.map((entry, idx) => {
-                          const matched = sheetStoreMap.get(normalizeCode(entry.code));
+                          const normalized = normalizeCode(entry.code);
+                          const storeInfo = sheetStoreMap.get(normalized);
+                          const isMatched = Boolean(storeInfo);
+
                           return (
-                            <tr
-                              key={`${batch.id}-${entry.code}-${idx}`}
-                              className="hover:bg-muted/30 transition-colors"
-                            >
+                            <tr key={`${batch.id}-${idx}`} className="hover:bg-muted/40">
                               <td className="px-3 py-2">
                                 <input
                                   type="text"
                                   value={entry.code}
                                   onChange={(e) => handleEditEntry(batch.id, idx, 'code', e.target.value)}
-                                  className="h-8 w-24 rounded border border-input bg-transparent px-2 text-sm font-medium tabular-nums focus:outline-none focus:ring-1 focus:ring-ring"
+                                  className="w-20 rounded border border-input bg-card px-1.5 py-0.5 text-xs font-bold text-foreground"
                                 />
+                                {storeInfo && (
+                                  <span className="ml-2 text-muted-foreground">
+                                    Loja {storeInfo.display}
+                                  </span>
+                                )}
                               </td>
-                              <td className="px-3 py-2">
+                              <td className="px-3 py-2 text-muted-foreground">
+                                {storeInfo ? (
+                                  <span className="font-medium text-foreground">{storeInfo.route}</span>
+                                ) : (
+                                  <span className="text-warning-foreground italic">Não encontrada</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-right">
                                 <input
                                   type="number"
                                   min={0}
                                   value={entry.volumes}
                                   onChange={(e) => handleEditEntry(batch.id, idx, 'volumes', e.target.value)}
-                                  className="h-8 w-24 rounded border border-input bg-transparent px-2 text-sm font-semibold tabular-nums text-primary focus:outline-none focus:ring-1 focus:ring-ring"
+                                  className="w-16 rounded border border-input bg-card px-1.5 py-0.5 text-right text-xs font-bold text-primary"
                                 />
                               </td>
-                              <td className="px-3 py-2 tabular-nums text-center text-muted-foreground">
-                                {entry.occurrences}
-                              </td>
-                              <td className="px-3 py-2 tabular-nums text-center text-muted-foreground">
-                                {entry.ignored}
-                              </td>
-                              <td className="px-3 py-2 font-medium text-foreground">
-                                {matched?.route ?? <span className="text-muted-foreground font-normal">—</span>}
-                              </td>
-                              <td className="px-3 py-2">
-                                {matched ? (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-success/15 px-2.5 py-0.5 text-xs font-semibold text-success">
-                                    <CheckCircle2 className="h-3 w-3" />
-                                    Encontrada
+                              <td className="px-3 py-2 text-center">
+                                {isMatched ? (
+                                  <span className="inline-flex rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success">
+                                    Pronta
                                   </span>
                                 ) : (
-                                  <span className="inline-flex items-center gap-1 rounded-full bg-warning/20 px-2.5 py-0.5 text-xs font-semibold text-warning-foreground">
-                                    <AlertTriangle className="h-3 w-3" />
-                                    Não está na planilha
+                                  <span className="inline-flex rounded-full bg-warning/20 px-2 py-0.5 text-[10px] font-semibold text-warning-foreground">
+                                    Fora da planilha
                                   </span>
                                 )}
                               </td>
                               <td className="px-3 py-2 text-right">
                                 <button
+                                  type="button"
                                   onClick={() => handleRemoveEntry(batch.id, idx)}
-                                  className="text-xs font-medium text-destructive hover:underline inline-flex items-center gap-1"
+                                  className="text-[11px] text-muted-foreground hover:text-destructive"
                                 >
-                                  <Trash2 className="h-3.5 w-3.5" />
                                   Remover
                                 </button>
                               </td>
@@ -1210,27 +1132,15 @@ export default function App() {
 
                 {/* Confirm step actions */}
                 <div className="mt-5 flex flex-wrap items-center gap-3 pt-3 border-t border-border/60">
-                  {sheetData?.sourceType === 'google_sheets' ? (
-                    <button
-                      onClick={() => setShowConfirmModal(true)}
-                      disabled={!matchedStores.length || isLoading}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-                    >
-                      <Globe className="h-4 w-4" />
-                      Preencher no Google Sheets
-                      <ArrowRight className="h-4 w-4 ml-1" />
-                    </button>
-                  ) : (
-                    <button
-                      onClick={handleFillLocalWorkbook}
-                      disabled={!sheetData || !matchedStores.length}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      Confirmar e preencher planilha XLSX
-                      <ArrowRight className="h-4 w-4 ml-1" />
-                    </button>
-                  )}
+                  <button
+                    onClick={() => setShowConfirmModal(true)}
+                    disabled={!matchedStores.length || isLoading || !sheetData}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50 disabled:pointer-events-none cursor-pointer"
+                  >
+                    <Globe className="h-4 w-4" />
+                    Preencher no Google Sheets
+                    <ArrowRight className="h-4 w-4 ml-1" />
+                  </button>
 
                   <button
                     onClick={() => setStep(1)}
@@ -1240,9 +1150,9 @@ export default function App() {
                   </button>
 
                   {!sheetData && (
-                    <span className="text-sm text-warning-foreground flex items-center gap-1.5">
+                    <span className="text-sm text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
                       <AlertTriangle className="h-4 w-4 text-warning" />
-                      Conecte ou envie a planilha acima para preencher.
+                      Conecte sua planilha do Google Sheets acima para preencher.
                     </span>
                   )}
                 </div>
@@ -1256,21 +1166,19 @@ export default function App() {
                   <div>
                     <h2 className="text-lg font-semibold flex items-center gap-2">
                       <CheckCircle2 className="h-5 w-5 text-success" />
-                      <span>Resultado da Conferência</span>
+                      <span>Resultado da Conferência no Google Sheets</span>
                     </h2>
                     <p className="mt-0.5 text-sm text-muted-foreground">
-                      {sheetData.sourceType === 'google_sheets'
-                        ? 'Os volumes foram gravados com sucesso na sua planilha online do Google Sheets!'
-                        : 'A planilha local foi preenchida com sucesso e está pronta para exportação.'}
+                      Os volumes foram gravados com sucesso na sua planilha online!
                     </p>
                   </div>
 
-                  {sheetData.sourceType === 'google_sheets' && sheetData.spreadsheetUrl && (
+                  {sheetData.spreadsheetUrl && (
                     <a
                       href={sheetData.spreadsheetUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-medium shadow hover:bg-blue-700 transition-colors"
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-blue-600 text-white text-sm font-semibold shadow hover:bg-blue-700 transition-colors"
                     >
                       <ExternalLink className="h-4 w-4" />
                       Abrir no Google Sheets
@@ -1288,20 +1196,12 @@ export default function App() {
 
                 {/* Action buttons */}
                 <div className="mt-4 flex flex-wrap gap-3">
-                  {sheetData.sourceType === 'local_xlsx' ? (
-                    <button
-                      onClick={() => downloadFilledWorkbook(sheetData, selectedDate)}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-success px-5 py-2.5 text-sm font-medium text-success-foreground shadow transition-colors hover:bg-success/90 cursor-pointer"
-                    >
-                      <Download className="h-4 w-4" />
-                      Baixar planilha preenchida (XLSX)
-                    </button>
-                  ) : (
+                  {sheetData.spreadsheetUrl && (
                     <a
                       href={sheetData.spreadsheetUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-medium text-white shadow transition-colors hover:bg-blue-700 cursor-pointer"
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white shadow transition-colors hover:bg-blue-700 cursor-pointer"
                     >
                       <Globe className="h-4 w-4" />
                       Acessar planilha no Google Sheets
@@ -1430,7 +1330,7 @@ export default function App() {
                   Histórico de processamentos
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Conferências salvas localmente neste navegador.
+                  Conferências enviadas para o Google Sheets.
                 </p>
               </div>
               {historyList.length > 0 && (
@@ -1439,7 +1339,7 @@ export default function App() {
                     clearHistory();
                     setHistoryList([]);
                   }}
-                  className="inline-flex items-center gap-1.5 text-xs text-destructive hover:underline font-medium"
+                  className="inline-flex items-center gap-1.5 text-xs text-destructive hover:underline font-medium cursor-pointer"
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                   Limpar histórico
@@ -1477,17 +1377,8 @@ export default function App() {
                         </td>
                         <td className="px-3 py-2.5">
                           <span className="inline-flex items-center gap-1 text-xs">
-                            {record.targetType === 'google_sheets' ? (
-                              <>
-                                <Globe className="h-3.5 w-3.5 text-blue-600" />
-                                <span className="font-medium text-blue-600">Google Sheets</span>
-                              </>
-                            ) : (
-                              <>
-                                <FileCode className="h-3.5 w-3.5 text-emerald-600" />
-                                <span className="text-muted-foreground">Arquivo XLSX</span>
-                              </>
-                            )}
+                            <Globe className="h-3.5 w-3.5 text-blue-600" />
+                            <span className="font-medium text-blue-600">Google Sheets</span>
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-muted-foreground max-w-xs truncate">
@@ -1527,26 +1418,17 @@ export default function App() {
               <div>
                 <h2 className="text-lg font-semibold flex items-center gap-2">
                   <Route className="h-5 w-5 text-primary" />
-                  Rotas e lojas da planilha
+                  Rotas e lojas da planilha online
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Visualização detalhada da estrutura da planilha conectada.
+                  Visualização detalhada das lojas e colunas lidas no Google Sheets.
                 </p>
               </div>
 
               {sheetData && (
                 <div className="inline-flex items-center gap-2 text-xs font-medium bg-muted px-3 py-1 rounded-md border border-border">
-                  {sheetData.sourceType === 'google_sheets' ? (
-                    <>
-                      <Globe className="h-3.5 w-3.5 text-blue-600" />
-                      <span>{sheetData.spreadsheetTitle}</span>
-                    </>
-                  ) : (
-                    <>
-                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                      <span>{sheetData.fileName}</span>
-                    </>
-                  )}
+                  <Globe className="h-3.5 w-3.5 text-blue-600" />
+                  <span>{sheetData.spreadsheetTitle}</span>
                 </div>
               )}
             </div>
@@ -1581,19 +1463,16 @@ export default function App() {
             ) : (
               <div className="py-12 text-center text-muted-foreground text-sm">
                 <FileSpreadsheet className="h-10 w-10 mx-auto text-muted-foreground/40 mb-2" />
-                <p>Nenhuma planilha conectada no momento.</p>
+                <p>Nenhuma planilha do Google Sheets conectada no momento.</p>
                 <p className="text-xs text-muted-foreground/75 mt-1">
-                  Envie a planilha XLSX ou conecte o Google Sheets na aba <strong>Processar</strong>.
+                  Conecte sua planilha na aba <strong>Processar</strong> com sua conta Google para visualizar as rotas.
                 </p>
                 <button
-                  onClick={async () => {
-                    await handleLoadDemoSheet();
-                    setActiveTab('planilha');
-                  }}
-                  className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground shadow hover:bg-primary/90 cursor-pointer"
+                  onClick={() => setActiveTab('processar')}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-blue-700 cursor-pointer"
                 >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Carregar planilha modelo de demonstração
+                  <Globe className="h-3.5 w-3.5" />
+                  Ir para Conectar Google Sheets
                 </button>
               </div>
             )}
@@ -1601,83 +1480,79 @@ export default function App() {
         )}
       </main>
 
-      {/* Confirmation Modal for Google Sheets API Mutation (MANDATORY) */}
-      {showConfirmModal && sheetData && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-fadeIn">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl space-y-4">
+      {/* Confirmation Modal before writing into Google Sheets */}
+      {showConfirmModal && sheetData && allEntries && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-600 shrink-0">
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700">
                 <Globe className="h-5 w-5" />
               </div>
               <div>
-                <h3 className="text-base font-semibold text-foreground">
-                  Confirmar Gravação no Google Sheets
-                </h3>
+                <h3 className="text-base font-bold text-foreground">Confirmar Gravação no Google Sheets</h3>
                 <p className="text-xs text-muted-foreground">
-                  Esta operação atualizará os volumes das lojas diretamente na planilha online.
+                  {sheetData.spreadsheetTitle} • Aba {sheetData.sheetName}
                 </p>
               </div>
             </div>
 
-            <div className="rounded-lg border border-border bg-muted/40 p-3.5 text-xs space-y-2">
+            <div className="rounded-lg bg-muted/40 p-3 space-y-2 text-xs">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Planilha:</span>
-                <span className="font-semibold text-foreground truncate max-w-[220px]">
-                  {sheetData.spreadsheetTitle || sheetData.fileName}
-                </span>
+                <span className="text-muted-foreground">E-mail do autor:</span>
+                <span className="font-mono font-medium text-foreground">{googleUser?.email || 'Google Account'}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Aba / Página:</span>
-                <span className="font-semibold text-foreground">{sheetData.sheetName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Data da Conferência:</span>
-                <span className="font-semibold text-foreground tabular-nums">
-                  {selectedDate.split('-').reverse().join('/')}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Número do Pedido:</span>
-                <span className="font-semibold text-primary tabular-nums">{orderNumber}</span>
-              </div>
-              <div className="flex justify-between border-t border-border/60 pt-2">
                 <span className="text-muted-foreground">Lojas a atualizar:</span>
-                <span className="font-bold text-success tabular-nums">{matchedStores.length} lojas</span>
+                <span className="font-bold text-foreground">{matchedStores.length} lojas</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Total de Volumes:</span>
-                <span className="font-bold text-primary tabular-nums">{totalVolumes} volumes</span>
+                <span className="text-muted-foreground">Total de volumes:</span>
+                <span className="font-bold text-primary">{totalVolumes}</span>
               </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Data da conferência:</span>
+                <span className="font-medium text-foreground">{selectedDate.split('-').reverse().join('/')}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Nº Pedido (Juliano):</span>
+                <span className="font-medium text-foreground">{orderNumber}</span>
+              </div>
+              {unmatchedStores.length > 0 && (
+                <div className="pt-2 border-t border-border flex justify-between text-warning-foreground font-medium">
+                  <span>Lojas fora da planilha:</span>
+                  <span>{unmatchedStores.length} (serão ignoradas)</span>
+                </div>
+              )}
             </div>
 
             <p className="text-xs text-muted-foreground leading-relaxed">
-              As células das rotas correspondentes receberão os volumes conferidos e as linhas de total serão recalculadas automaticamente.
+              Os volumes serão gravados diretamente nas células correspondentes de cada loja no Google Sheets.
             </p>
 
-            <div className="flex items-center justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-2 pt-2">
               <button
                 type="button"
-                disabled={isSavingGoogleSheets}
                 onClick={() => setShowConfirmModal(false)}
-                className="px-4 py-2 text-xs font-medium rounded-md border border-input bg-card hover:bg-accent text-foreground transition-colors cursor-pointer"
+                disabled={isSavingGoogleSheets}
+                className="px-4 py-2 text-xs font-medium rounded-md border border-input bg-background hover:bg-accent text-foreground transition-colors cursor-pointer"
               >
                 Cancelar
               </button>
               <button
                 type="button"
-                disabled={isSavingGoogleSheets}
                 onClick={handleExecuteGoogleSheetsUpdate}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white shadow transition-colors disabled:opacity-50 cursor-pointer"
+                disabled={isSavingGoogleSheets}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-bold rounded-md bg-blue-600 hover:bg-blue-700 text-white shadow transition-colors disabled:opacity-50 cursor-pointer"
               >
                 {isSavingGoogleSheets ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Gravando na planilha...
+                    <span>Gravando na planilha...</span>
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Confirmar e Gravar
+                    <Check className="h-3.5 w-3.5" />
+                    <span>Confirmar e Gravar</span>
                   </>
                 )}
               </button>
@@ -1694,21 +1569,13 @@ export default function App() {
           setShowVercelHelpModal(false);
           setUnauthorizedDomain(null);
         }}
-        onRetryLogin={async () => {
-          await handleGoogleLogin();
-        }}
-        onSwitchToLocalXlsx={() => {
-          setSheetMode('local_xlsx');
-          setErrorMessage('');
-          setShowVercelHelpModal(false);
-          setUnauthorizedDomain(null);
-        }}
+        onRetryLogin={handleGoogleLogin}
         isRetrying={isLoggingIn}
       />
 
       {/* Footer */}
       <footer className="border-t border-border bg-card/50 py-4 text-center text-xs text-muted-foreground">
-        <p>Conferência de Volumes · Automação de Manifestos PDF para Google Sheets e Excel</p>
+        Conferência de Volumes · Preenchimento Automático do Google Sheets
       </footer>
     </div>
   );

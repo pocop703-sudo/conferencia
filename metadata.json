@@ -1,6 +1,6 @@
 {
   "name": "Conferência de Volumes",
-  "description": "Leia o manifesto de transferência em PDF e preencha automaticamente a planilha de conferência de volumes por rota.",
+  "description": "Leia manifestos de transferência em PDF ou imagem e preencha automaticamente sua planilha online do Google Sheets com sua conta Google.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
