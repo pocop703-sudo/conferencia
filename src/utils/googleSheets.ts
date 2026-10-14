@@ -54,12 +54,13 @@ export async function fetchSpreadsheetMeta(
   if (!res.ok) {
     const errorBody = await res.json().catch(() => ({}));
     const message =
-      errorBody?.error?.message ||
-      (res.status === 403
-        ? 'Sem permissão para acessar esta planilha. Verifique o compartilhamento.'
+      res.status === 401
+        ? 'AUTH_401: Sessão não autenticada no Google Sheets. O token expirou ou precisa de nova autorização. Clique em "Conectar / Trocar Conta Google" para fazer login com seu e-mail.'
+        : res.status === 403
+        ? 'AUTH_403: Sem permissão para acessar esta planilha. Verifique se a planilha está compartilhada com o seu e-mail conectado ou troque para a conta correta.'
         : res.status === 404
         ? 'Planilha não encontrada. Verifique o link ou ID informado.'
-        : `Erro ${res.status} ao acessar a API do Google Sheets`);
+        : errorBody?.error?.message || `Erro ${res.status} ao acessar a API do Google Sheets`;
     throw new Error(message);
   }
 
@@ -91,6 +92,16 @@ export async function readGoogleSheet(
 
   if (!res.ok) {
     const errorBody = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      throw new Error(
+        'AUTH_401: Sessão não autenticada no Google Sheets. O token expirou. Clique em "Conectar / Trocar Conta Google" para renovar o acesso com sua conta.'
+      );
+    }
+    if (res.status === 403) {
+      throw new Error(
+        'AUTH_403: Permissão negada para ler a planilha. Verifique se a planilha está compartilhada com o seu e-mail do Google ou clique em "Trocar Conta" para entrar com a conta correta.'
+      );
+    }
     throw new Error(
       errorBody?.error?.message || `Falha ao ler os dados da aba '${sheetName}'`
     );
@@ -304,6 +315,16 @@ export async function batchUpdateGoogleSheet(
 
   if (!batchRes.ok) {
     const errData = await batchRes.json().catch(() => ({}));
+    if (batchRes.status === 401) {
+      throw new Error(
+        'AUTH_401: Não autenticado. Sua sessão do Google Sheets expirou. Faça login novamente ou troque de conta para gravar na planilha.'
+      );
+    }
+    if (batchRes.status === 403) {
+      throw new Error(
+        'AUTH_403: Permissão negada para editar a planilha. Certifique-se de que a conta Google conectada possui permissão de EDITOR na planilha compartilhada.'
+      );
+    }
     throw new Error(
       errData?.error?.message ||
         `Erro ${batchRes.status} ao gravar dados na planilha do Google Sheets`

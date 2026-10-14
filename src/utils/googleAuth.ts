@@ -24,14 +24,23 @@ export const firebaseProjectId = activeConfig.projectId;
 
 export const SCOPES = ['https://www.googleapis.com/auth/spreadsheets'];
 
-const provider = new GoogleAuthProvider();
-SCOPES.forEach((scope) => provider.addScope(scope));
-
 const STORAGE_TOKEN_KEY = 'gs_google_access_token';
+const STORAGE_TIME_KEY = 'gs_google_token_time';
 
-let isSigningIn = false;
 let cachedAccessToken: string | null =
   typeof window !== 'undefined' ? localStorage.getItem(STORAGE_TOKEN_KEY) : null;
+
+// Creates a fresh GoogleAuthProvider with prompt=select_account
+// This ensures that Google ALWAYS lets the user choose which account to use
+// (e.g. pocop703@gmail.com, personal, work, etc.) and allows typing ANY email!
+export const createGoogleAuthProvider = () => {
+  const provider = new GoogleAuthProvider();
+  SCOPES.forEach((scope) => provider.addScope(scope));
+  provider.setCustomParameters({
+    prompt: 'select_account',
+  });
+  return provider;
+};
 
 export const initAuth = (
   onAuthSuccess?: (user: User, token: string | null) => void,
@@ -44,6 +53,7 @@ export const initAuth = (
       cachedAccessToken = null;
       if (typeof window !== 'undefined') {
         localStorage.removeItem(STORAGE_TOKEN_KEY);
+        localStorage.removeItem(STORAGE_TIME_KEY);
       }
       if (onAuthFailure) onAuthFailure();
     }
@@ -52,7 +62,7 @@ export const initAuth = (
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
-    isSigningIn = true;
+    const provider = createGoogleAuthProvider();
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
@@ -62,6 +72,7 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
     cachedAccessToken = credential.accessToken;
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_TOKEN_KEY, credential.accessToken);
+      localStorage.setItem(STORAGE_TIME_KEY, Date.now().toString());
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
@@ -77,9 +88,21 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
       throw customErr;
     }
     throw error;
-  } finally {
-    isSigningIn = false;
   }
+};
+
+export const switchGoogleAccount = async (): Promise<{ user: User; accessToken: string } | null> => {
+  try {
+    await signOut(auth);
+  } catch (e) {
+    console.warn('Error signing out before switch account:', e);
+  }
+  cachedAccessToken = null;
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(STORAGE_TOKEN_KEY);
+    localStorage.removeItem(STORAGE_TIME_KEY);
+  }
+  return googleSignIn();
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
@@ -95,8 +118,10 @@ export const setAccessToken = (token: string | null) => {
   if (typeof window !== 'undefined') {
     if (token) {
       localStorage.setItem(STORAGE_TOKEN_KEY, token);
+      localStorage.setItem(STORAGE_TIME_KEY, Date.now().toString());
     } else {
       localStorage.removeItem(STORAGE_TOKEN_KEY);
+      localStorage.removeItem(STORAGE_TIME_KEY);
     }
   }
 };
@@ -106,5 +131,6 @@ export const logoutGoogle = async () => {
   cachedAccessToken = null;
   if (typeof window !== 'undefined') {
     localStorage.removeItem(STORAGE_TOKEN_KEY);
+    localStorage.removeItem(STORAGE_TIME_KEY);
   }
 };

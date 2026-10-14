@@ -17,6 +17,7 @@ import {
 import {
   initAuth,
   googleSignIn,
+  switchGoogleAccount,
   logoutGoogle,
   getAccessToken,
   firebaseProjectId,
@@ -46,6 +47,7 @@ import {
   LogIn,
   Mail,
   UserCheck,
+  Users,
 } from 'lucide-react';
 
 interface StatCardProps {
@@ -184,7 +186,7 @@ export default function App() {
       if (res) {
         setGoogleUser(res.user);
         setGoogleAccessToken(res.accessToken);
-        setStatusMessage(`Conectado como ${res.user.displayName || res.user.email}`);
+        setStatusMessage(`Conectado com sucesso: ${res.user.email}`);
 
         // If URL is present, connect immediately
         const targetUrl = googleSheetsUrl.trim() || localStorage.getItem(STORAGE_SAVED_URL_KEY) || '';
@@ -199,6 +201,35 @@ export default function App() {
         setShowVercelHelpModal(true);
       }
       setErrorMessage(`Falha na autenticação do Google: ${err.message}`);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  // Handle Switch Google Account (forces account selector so user can choose or type any account)
+  async function handleSwitchAccount() {
+    try {
+      setIsLoggingIn(true);
+      setErrorMessage('');
+      setUnauthorizedDomain(null);
+      const res = await switchGoogleAccount();
+      if (res) {
+        setGoogleUser(res.user);
+        setGoogleAccessToken(res.accessToken);
+        setStatusMessage(`Conta alterada com sucesso! Conectado como ${res.user.email}`);
+
+        const targetUrl = googleSheetsUrl.trim() || localStorage.getItem(STORAGE_SAVED_URL_KEY) || '';
+        if (targetUrl) {
+          connectToGoogleSheet(targetUrl, selectedTabName, res.accessToken);
+        }
+      }
+    } catch (err: any) {
+      if (err?.code === 'auth/unauthorized-domain' || err?.message?.includes('unauthorized-domain')) {
+        const domain = err.domain || (typeof window !== 'undefined' ? window.location.hostname : 'seu-dominio');
+        setUnauthorizedDomain(domain);
+        setShowVercelHelpModal(true);
+      }
+      setErrorMessage(`Falha ao trocar de conta: ${err.message}`);
     } finally {
       setIsLoggingIn(false);
     }
@@ -261,6 +292,14 @@ export default function App() {
         localStorage.setItem(STORAGE_SAVED_TAB_KEY, targetTab);
       }
     } catch (err: any) {
+      if (
+        err.message?.includes('AUTH_401') ||
+        err.message?.includes('não autenticada') ||
+        err.message?.includes('Não autenticado') ||
+        err.message?.includes('401')
+      ) {
+        setGoogleAccessToken(null);
+      }
       setErrorMessage(err.message || 'Falha ao conectar com a planilha do Google Sheets');
       setSheetData(null);
     } finally {
@@ -533,8 +572,17 @@ export default function App() {
                 </span>
                 <button
                   type="button"
+                  onClick={handleSwitchAccount}
+                  className="ml-1 text-white/90 hover:text-white hover:bg-white/15 px-2 py-0.5 rounded text-[11px] font-medium transition-colors flex items-center gap-1 cursor-pointer"
+                  title="Trocar para outro e-mail do Google (ex: pocop703@gmail.com)"
+                >
+                  <Users className="h-3 w-3" />
+                  <span className="hidden sm:inline">Trocar conta</span>
+                </button>
+                <button
+                  type="button"
                   onClick={handleGoogleLogout}
-                  className="ml-1 text-white/70 hover:text-white p-0.5 rounded transition-colors"
+                  className="text-white/70 hover:text-white p-0.5 rounded transition-colors cursor-pointer"
                   title="Sair da conta Google"
                 >
                   <LogOut className="h-3.5 w-3.5" />
@@ -552,7 +600,7 @@ export default function App() {
                 ) : (
                   <LogIn className="h-3.5 w-3.5" />
                 )}
-                Login Google
+                Login Google (Qualquer conta)
               </button>
             )}
 
@@ -638,6 +686,43 @@ export default function App() {
                     </button>
                   </div>
                 )}
+
+                {(errorMessage.includes('AUTH_401') || errorMessage.includes('não autenticada') || errorMessage.includes('Não autenticado') || errorMessage.includes('expirou')) && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isLoggingIn}
+                      onClick={handleGoogleLogin}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                    >
+                      {isLoggingIn ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+                      <span>Fazer Login / Escolher Conta Google</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLoggingIn}
+                      onClick={handleSwitchAccount}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-card hover:bg-muted text-xs font-medium transition-colors cursor-pointer text-foreground"
+                    >
+                      <Users className="h-3.5 w-3.5 text-primary" />
+                      <span>Entrar com outra conta (ex: pocop703@gmail.com)</span>
+                    </button>
+                  </div>
+                )}
+
+                {(errorMessage.includes('AUTH_403') || errorMessage.includes('permissão') || errorMessage.includes('Permissão negada')) && (
+                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={isLoggingIn}
+                      onClick={handleSwitchAccount}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                      <span>Trocar de Conta Google (ex: pocop703@gmail.com)</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -656,7 +741,7 @@ export default function App() {
                       <span>Planilha Online no Google Sheets</span>
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      O acesso à planilha é gerenciado exclusivamente através da sua conta Google conectada.
+                      Aceita qualquer conta Google (@gmail.com ou institucional). O acesso é concedido via credencial do e-mail logado.
                     </p>
                   </div>
                   <button
@@ -698,48 +783,61 @@ export default function App() {
                             Acesso Google Sheets Ativo
                           </span>
                         </div>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1 mt-0.5">
-                          <Mail className="h-3 w-3 text-blue-600" />
-                          <span className="font-mono">{googleUser.email}</span>
+                        <p className="text-xs text-muted-foreground flex flex-wrap items-center gap-1.5 mt-0.5">
+                          <Mail className="h-3 w-3 text-blue-600 shrink-0" />
+                          <span className="font-mono font-medium text-foreground">{googleUser.email}</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            (Qualquer conta Google é aceita)
+                          </span>
                         </p>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-start sm:self-auto">
-                      {!googleAccessToken && (
-                        <button
-                          type="button"
-                          disabled={isLoggingIn}
-                          onClick={handleGoogleLogin}
-                          className="inline-flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 px-3 py-1.5 rounded-md font-semibold transition-colors cursor-pointer"
-                        >
-                          Renovar autorização
-                        </button>
-                      )}
+                    <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
+                      <button
+                        type="button"
+                        disabled={isLoggingIn}
+                        onClick={handleSwitchAccount}
+                        className="inline-flex items-center gap-1.5 text-xs text-primary bg-primary/10 hover:bg-primary/20 px-3 py-1.5 rounded-md font-semibold transition-colors cursor-pointer"
+                        title="Escolha outro e-mail ou faça login com outra conta (ex: pocop703@gmail.com)"
+                      >
+                        {isLoggingIn ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Users className="h-3.5 w-3.5" />
+                        )}
+                        Trocar conta Google
+                      </button>
                       <button
                         type="button"
                         onClick={handleGoogleLogout}
-                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive px-2.5 py-1.5 rounded-md hover:bg-card border border-border/60 transition-colors"
+                        className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-destructive px-2.5 py-1.5 rounded-md hover:bg-card border border-border/60 transition-colors cursor-pointer"
+                        title="Sair da conta Google"
                       >
                         <LogOut className="h-3.5 w-3.5" />
-                        Trocar conta / Sair
+                        Sair
                       </button>
                     </div>
                   </div>
                 ) : (
                   /* Not Logged In Prompt */
-                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-4 rounded-xl border border-blue-500/30 bg-blue-500/5">
                     <div className="flex items-start gap-3">
                       <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 shrink-0">
                         <UserCheck className="h-5 w-5" />
                       </div>
                       <div>
-                        <p className="text-sm font-bold text-foreground">
-                          Faça login com sua conta Google para continuar
-                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-bold text-foreground">
+                            Faça login com sua conta Google para continuar
+                          </p>
+                          <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300">
+                            Qualquer e-mail aceito
+                          </span>
+                        </div>
                         <p className="text-xs text-muted-foreground mt-0.5 max-w-xl leading-relaxed">
-                          O acesso à sua planilha online do Google Sheets é concedido diretamente ao e-mail conectado.
-                          Seus dados permanecem seguros no seu Google Drive.
+                          O aplicativo aceita <strong>qualquer conta Google</strong> (@gmail.com ou institucional).
+                          Ao clicar no botão, a janela do Google exibirá a lista de contas salvas para você selecionar (ex: <span className="font-mono text-primary font-semibold">pocop703@gmail.com</span>) ou digitar qualquer outra conta.
                         </p>
                       </div>
                     </div>
